@@ -1,0 +1,33 @@
+{
+  "name": "softy-ecommerce-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Softy ecommerce API and management backend",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "setup": "node scripts/setup.js",
+    "seed": "node scripts/seed.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "check": "node --check index.js && node --check config/db.js && node --check middleware/auth.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "cloudinary": "^2.11.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongodb": "^6.20.0",
+    "multer": "^2.0.2",
+    "nodemailer": "^10.0.10",
+    "sanitize-html": "^2.17.0",
+    "sharp": "^0.34.4"
+  }
+}
