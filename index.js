@@ -230,7 +230,7 @@ async function seedSettings() {
   const ex = await db.collection('siteSettings').findOne({});
   if (!ex) {
     await db.collection('siteSettings').insertOne({
-      logo: '/brand/softy-ecom-logo.png', favicon: '/favicon.svg', companyName: 'Softy', slogan: 'Gentle care for real skin.',
+      logo: '/brand/softy-ecom-logo-v2.png', favicon: '/favicon.svg', companyName: 'Softy', slogan: 'Gentle care for real skin.',
       contact: { email: 'globalcosmeticslines@gmail.com', phone: '01911-238421', address: '64/68 North Kamalapur, Dhaka - 1217, Bangladesh', hours: 'Saturday to Thursday: 9:00 AM to 6:00 PM' },
       social: { fb: '', ig: '', tiktok: '', yt: '' },
       footerAbout: 'Thoughtfully formulated skincare for a cleaner, brighter, healthier routine.',
@@ -250,10 +250,10 @@ async function seedSettings() {
       createdAt: new Date(),
     });
     console.log('Settings seeded');
-  } else if (ex.logo === '/brand/softyy-logo.png') {
+  } else if (['/brand/softyy-logo.png', '/brand/softy-ecom-logo.png'].includes(ex.logo)) {
     await db.collection('siteSettings').updateOne(
       { _id: ex._id },
-      { $set: { logo: '/brand/softy-ecom-logo.png', updatedAt: new Date() } }
+      { $set: { logo: '/brand/softy-ecom-logo-v2.png', updatedAt: new Date() } }
     );
   }
 }
@@ -1296,7 +1296,7 @@ async function seedSoftyCatalog() {
     return [category.slug, result.insertedId.toString()];
   }));
   const categoryIds = Object.fromEntries(categoryResults);
-  const brandResult = await db.collection('brands').insertOne({ name: 'Softy', slug: 'softy', logo: '/brand/softy-ecom-logo.png', isActive: true, createdAt: now });
+  const brandResult = await db.collection('brands').insertOne({ name: 'Softy', slug: 'softy', logo: '/brand/softy-ecom-logo-v2.png', isActive: true, createdAt: now });
   const stock = Number(process.env.SEED_STOCK || 12);
   const data = [
     ['Softyy Lemon Face Wash', 'lemon-face-wash', 'Face Care', 'Deep cleansing and oil control with a fresh lemon finish.', 350, '/products/softyy/lemon-face-wash.jpg', ['Oil Control', 'Acne Care', 'Brightening']],
