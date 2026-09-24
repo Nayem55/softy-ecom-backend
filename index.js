@@ -9,6 +9,7 @@ const { adminAuth, generateToken } = require('./middleware/auth');
 const { sendOrderConfirmation } = require('./utils/email');
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
+const crypto = require('crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -71,6 +72,34 @@ const DEFAULT_SHIPPING_SETTINGS = {
   outsideDhakaCharge: 120,
   freeShippingEnabled: true,
   freeShippingMin: 3000,
+};
+const DEFAULT_INTEGRATION_SETTINGS = {
+  googleAnalytics: { enabled: Boolean(process.env.GA_MEASUREMENT_ID || process.env.GOOGLE_ANALYTICS_ID), measurementId: process.env.GA_MEASUREMENT_ID || process.env.GOOGLE_ANALYTICS_ID || '' },
+  facebookPixel: { enabled: Boolean(process.env.FACEBOOK_PIXEL_ID), pixelId: process.env.FACEBOOK_PIXEL_ID || '' },
+  cloudinary: { enabled: true, cloudName: process.env.CLOUDINARY_CLOUD_NAME || '', uploadPreset: process.env.CLOUDINARY_UPLOAD_PRESET || process.env.CLOUDINARY_PRESET || process.env.UPLOAD_PRESET || '', folder: process.env.CLOUDINARY_FOLDER || 'softy-ecommerce' },
+};
+const DEFAULT_EMAIL_SETTINGS = { enabled: true, forwardingEnabled: true, forwardingEmail: process.env.ORDER_FORWARDING_EMAIL || process.env.ORDER_NOTIFICATION_EMAIL || process.env.GMAIL_USER || '', senderName: process.env.EMAIL_SENDER_NAME || 'Softy', replyTo: process.env.EMAIL_REPLY_TO || '', smtpUser: process.env.GMAIL_USER || '' };
+const emailKey = crypto.createHash('sha256').update(process.env.JWT_SECRET || 'softy-email-settings-key').digest();
+const encryptEmailSecret = (value) => { if (!value) return ''; const iv = crypto.randomBytes(12); const cipher = crypto.createCipheriv('aes-256-gcm', emailKey, iv); const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]); return `enc:${iv.toString('base64')}:${cipher.getAuthTag().toString('base64')}:${encrypted.toString('base64')}`; };
+const decryptEmailSecret = (value) => { if (!value) return process.env.GMAIL_APP_PASSWORD || ''; if (!String(value).startsWith('enc:')) return String(value); try { const [, iv, tag, data] = String(value).split(':'); const decipher = crypto.createDecipheriv('aes-256-gcm', emailKey, Buffer.from(iv, 'base64')); decipher.setAuthTag(Buffer.from(tag, 'base64')); return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8'); } catch { return ''; } };
+const emailSettingsOf = (settings = {}) => ({ ...DEFAULT_EMAIL_SETTINGS, ...(settings.emailSettings || {}) });
+const normalizeEmailSettings = (input = {}, existing = {}) => { const current = emailSettingsOf(existing); const forwardingEmail = String(input.forwardingEmail ?? current.forwardingEmail ?? '').trim().toLowerCase(); const replyTo = String(input.replyTo ?? current.replyTo ?? '').trim().toLowerCase(); const valid = value => !value || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); if (!valid(forwardingEmail) || !valid(replyTo)) throw new Error('Enter valid email addresses for forwarding and reply-to.'); const smtpUser=String(input.smtpUser||'').trim()||current.smtpUser||''; const smtpPassword=String(input.smtpPassword||'').trim()?encryptEmailSecret(input.smtpPassword):(current.smtpPassword||''); return { enabled: toBool(input.enabled, current.enabled), forwardingEnabled: toBool(input.forwardingEnabled, current.forwardingEnabled), forwardingEmail, senderName: String(input.senderName ?? current.senderName ?? 'Softy').trim().slice(0, 120), replyTo, smtpUser, smtpPassword }; };
+const integrationSettingsOf = (settings = {}) => ({
+  googleAnalytics: { ...DEFAULT_INTEGRATION_SETTINGS.googleAnalytics, ...(settings.integrations?.googleAnalytics || {}), enabled: toBool(settings.integrations?.googleAnalytics?.enabled, DEFAULT_INTEGRATION_SETTINGS.googleAnalytics.enabled) },
+  facebookPixel: { ...DEFAULT_INTEGRATION_SETTINGS.facebookPixel, ...(settings.integrations?.facebookPixel || {}), enabled: toBool(settings.integrations?.facebookPixel?.enabled, DEFAULT_INTEGRATION_SETTINGS.facebookPixel.enabled) },
+  cloudinary: { ...DEFAULT_INTEGRATION_SETTINGS.cloudinary, ...(settings.integrations?.cloudinary || {}), enabled: toBool(settings.integrations?.cloudinary?.enabled, DEFAULT_INTEGRATION_SETTINGS.cloudinary.enabled) },
+});
+const publicSettingsOf = (settings = {}) => { const safe = { ...settings, integrations: integrationSettingsOf(settings) }; delete safe._id; delete safe.integrations.cloudinary.apiKey; delete safe.integrations.cloudinary.apiSecret; if (safe.emailSettings) { safe.emailSettings = { ...safe.emailSettings, credentialsConfigured: Boolean(safe.emailSettings.smtpUser || safe.emailSettings.smtpPassword) }; delete safe.emailSettings.smtpUser; delete safe.emailSettings.smtpPassword; } return safe; };
+const adminSettingsOf = (settings = {}) => { const safe = publicSettingsOf(settings); const email = settings.emailSettings || {}; safe.emailSettings = { ...safe.emailSettings, smtpUser: email.smtpUser || process.env.GMAIL_USER || '', smtpPassword: decryptEmailSecret(email.smtpPassword), credentialsConfigured: Boolean(email.smtpPassword || process.env.GMAIL_APP_PASSWORD) }; return safe; };
+const normalizeIntegrationSettings = (input = {}, existing = {}) => {
+  const current = integrationSettingsOf(existing); const ga = input.googleAnalytics || {}; const fb = input.facebookPixel || {}; const cl = input.cloudinary || {};
+  const measurementId = String(ga.measurementId ?? current.googleAnalytics.measurementId ?? '').trim(); const pixelId = String(fb.pixelId ?? current.facebookPixel.pixelId ?? '').trim();
+  const cloudName = String(cl.cloudName ?? current.cloudinary.cloudName ?? '').trim(); const uploadPreset = String(cl.uploadPreset ?? current.cloudinary.uploadPreset ?? '').trim(); const folder = String(cl.folder ?? current.cloudinary.folder ?? 'softy-ecommerce').trim().replace(/^\/+|\/+$/g, '') || 'softy-ecommerce';
+  if (measurementId && !/^G-[A-Z0-9-]+$/i.test(measurementId)) throw new Error('Google Analytics Measurement ID is invalid.');
+  if (pixelId && !/^[A-Za-z0-9_-]{3,80}$/.test(pixelId)) throw new Error('Facebook Pixel ID is invalid.');
+  if (cloudName && !/^[A-Za-z0-9_-]+$/.test(cloudName)) throw new Error('Cloudinary cloud name is invalid.');
+  if (uploadPreset && !/^[A-Za-z0-9_./-]+$/.test(uploadPreset)) throw new Error('Cloudinary upload preset is invalid.');
+  return { googleAnalytics: { enabled: toBool(ga.enabled, current.googleAnalytics.enabled) && Boolean(measurementId), measurementId }, facebookPixel: { enabled: toBool(fb.enabled, current.facebookPixel.enabled) && Boolean(pixelId), pixelId }, cloudinary: { enabled: toBool(cl.enabled, current.cloudinary.enabled), cloudName, uploadPreset, folder } };
 };
 const toBool = (value, fallback = false) => {
   if (value === undefined || value === null) return fallback;
@@ -177,25 +206,23 @@ const hasCloudinaryConfig = () =>
   process.env.CLOUDINARY_CLOUD_NAME !== 'demo' &&
   process.env.CLOUDINARY_API_KEY !== 'demo' &&
   process.env.CLOUDINARY_API_SECRET !== 'demo';
-const uploadBufferToCloudinary = (file) => new Promise((resolve, reject) => {
-  if (!hasCloudinaryConfig()) {
+const uploadBufferToCloudinary = async (file) => {
+  const db = getDB(); const settings = await db.collection('siteSettings').findOne({}) || {}; const integration = integrationSettingsOf(settings).cloudinary;
+  cloudinary.config({ cloud_name: integration.cloudName || process.env.CLOUDINARY_CLOUD_NAME || 'demo', api_key: process.env.CLOUDINARY_API_KEY || 'demo', api_secret: process.env.CLOUDINARY_API_SECRET || 'demo' });
+  if (!integration.enabled || !hasCloudinaryConfig()) {
     const extension = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' }[file.mimetype];
-    if (!extension) { reject(new Error('Upload a JPG, PNG, WebP, or GIF image.')); return; }
+    if (!extension) throw new Error('Upload a JPG, PNG, WebP, or GIF image.');
     const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${extension}`;
-    fs.writeFile(path.join(localUploadDir, filename), file.buffer, error => error
-      ? reject(error)
-      : resolve({ secure_url: `/uploads/${filename}`, public_id: filename }));
-    return;
+    return new Promise((resolve, reject) => fs.writeFile(path.join(localUploadDir, filename), file.buffer, error => error ? reject(error) : resolve({ secure_url: `/uploads/${filename}`, public_id: filename })));
   }
-  const options = { folder: 'softy-ecommerce', resource_type: 'auto' };
-  const uploadPreset = process.env.CLOUDINARY_UPLOAD_PRESET || process.env.CLOUDINARY_PRESET || process.env.UPLOAD_PRESET;
+  const options = { folder: integration.folder || 'softy-ecommerce', resource_type: 'auto' };
+  const uploadPreset = integration.uploadPreset || process.env.CLOUDINARY_UPLOAD_PRESET || process.env.CLOUDINARY_PRESET || process.env.UPLOAD_PRESET;
   if (uploadPreset) options.upload_preset = uploadPreset;
-  const stream = cloudinary.uploader.upload_stream(
-    options,
-    (error, result) => error ? reject(error) : resolve(result)
-  );
-  stream.end(file.buffer);
-});
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(options, (error, result) => error ? reject(error) : resolve(result));
+    stream.end(file.buffer);
+  });
+};
 const sendUploadError = (res, err) => {
   const status = err.http_code || err.statusCode || 500;
   const message = err.message || 'Image upload failed';
@@ -239,6 +266,8 @@ async function seedSettings() {
       returnPolicy: 'Eligible unopened products can be reviewed for exchange within 7 days of delivery.',
       terms: 'By using our site you agree to our terms and conditions.',
       announcementText: 'FREE DELIVERY ON ORDERS OVER BDT 1,500 | 100% ORIGINAL PRODUCTS | EASY RETURNS',
+      integrations: DEFAULT_INTEGRATION_SETTINGS,
+      emailSettings: DEFAULT_EMAIL_SETTINGS,
       headerCategoryMenu: { enabled: true, label: 'Categories', showEmptyCategories: true },
       headerBrandMenu: { enabled: true, label: 'Brands' },
       navLinks: [
@@ -256,6 +285,11 @@ async function seedSettings() {
       { $set: { logo: '/brand/softy-ecom-logo-v2.png', updatedAt: new Date() } }
     );
   }
+}
+
+async function ensureIntegrationSettings() {
+  const db = getDB(); const existing = await db.collection('siteSettings').findOne({}) || {};
+  await db.collection('siteSettings').updateOne({}, { $set: { integrations: integrationSettingsOf(existing), emailSettings: emailSettingsOf(existing) } }, { upsert: true });
 }
 
 async function createIndexes() {
@@ -848,13 +882,16 @@ app.delete('/api/admin/banners/:id', adminAuth, async (req, res) => {
 
 // ============ SITE SETTINGS ============
 app.get('/api/settings', async (req, res) => {
-  try { const db = getDB(); const settings = await db.collection('siteSettings').findOne({}); res.json({ settings: settings || {} }); } catch (err) { res.status(500).json({ error: err.message }); }
+  try { const db = getDB(); const settings = await db.collection('siteSettings').findOne({}); res.json({ settings: publicSettingsOf(settings || {}) }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/admin/settings', adminAuth, async (req, res) => {
+  try { const db = getDB(); const settings = await db.collection('siteSettings').findOne({}); res.json({ settings: adminSettingsOf(settings || {}) }); } catch (err) { res.status(500).json({ error: err.message }); }
 });
 app.put('/api/admin/settings', adminAuth, async (req, res) => {
-  try { const db = getDB(); const update = { ...req.body }; delete update._id; delete update.createdAt; update.updatedAt = new Date(); await db.collection('siteSettings').updateOne({}, { $set: update }, { upsert: true }); res.json({ success: true }); } catch (err) { res.status(500).json({ error: err.message }); }
+  try { const db = getDB(); const existing = await db.collection('siteSettings').findOne({}) || {}; const update = { ...req.body, integrations: normalizeIntegrationSettings(req.body.integrations, existing), emailSettings: normalizeEmailSettings(req.body.emailSettings, existing) }; delete update._id; delete update.createdAt; delete update.integrations.cloudinary.apiKey; delete update.integrations.cloudinary.apiSecret; update.updatedAt = new Date(); await db.collection('siteSettings').updateOne({}, { $set: update }, { upsert: true }); res.json({ success: true, settings: adminSettingsOf({ ...existing, ...update }) }); } catch (err) { res.status(400).json({ error: err.message }); }
 });
 app.put('/api/settings', adminAuth, async (req, res) => {
-  try { const db = getDB(); const update = { ...req.body }; delete update._id; delete update.createdAt; update.updatedAt = new Date(); await db.collection('siteSettings').updateOne({}, { $set: update }, { upsert: true }); res.json({ success: true }); } catch (err) { res.status(500).json({ error: err.message }); }
+  try { const db = getDB(); const existing = await db.collection('siteSettings').findOne({}) || {}; const update = { ...req.body, integrations: normalizeIntegrationSettings(req.body.integrations, existing), emailSettings: normalizeEmailSettings(req.body.emailSettings, existing) }; delete update._id; delete update.createdAt; update.updatedAt = new Date(); await db.collection('siteSettings').updateOne({}, { $set: update }, { upsert: true }); res.json({ success: true, settings: adminSettingsOf({ ...existing, ...update }) }); } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 // ============ ORDER ROUTES ============
@@ -890,7 +927,7 @@ app.post('/api/orders', async (req, res) => {
     const result = await db.collection('orders').insertOne(order);
     if (userId) await db.collection('carts').deleteOne({ user: userId });
 
-    sendOrderConfirmation({ ...order, _id: result.insertedId }, settings).catch(() => {});
+    sendOrderConfirmation({ ...order, _id: result.insertedId }, settings).catch(error => console.error('[Email] Order confirmation failed:', error.message));
 
     res.json({ order: normalizeOrder({ ...order, _id: result.insertedId }) });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1328,6 +1365,7 @@ async function start() {
   await connectDB();
   await seedAdmin();
   await seedSettings();
+  await ensureIntegrationSettings();
   await createIndexes();
   await seedSoftyCatalog();
   app.listen(PORT, () => console.log('Server running on port ' + PORT));

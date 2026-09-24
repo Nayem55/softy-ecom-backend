@@ -1,12 +1,15 @@
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 
 let transporter = null;
+let transporterKey = '';
+function secret(value) { if (!value || !String(value).startsWith('enc:')) return value || ''; try { const [, iv, tag, data] = String(value).split(':'); const key = crypto.createHash('sha256').update(process.env.JWT_SECRET || 'softy-email-settings-key').digest(); const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64')); decipher.setAuthTag(Buffer.from(tag, 'base64')); return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8'); } catch { return ''; } }
 
-function getTransporter() {
-  if (transporter) return transporter;
-
-  const emailUser = process.env.GMAIL_USER;
-  const emailPass = process.env.GMAIL_APP_PASSWORD;
+function getTransporter(emailSettings = {}) {
+  const emailUser = secret(emailSettings.smtpUser) || process.env.GMAIL_USER;
+  const emailPass = secret(emailSettings.smtpPassword) || process.env.GMAIL_APP_PASSWORD;
+  const key = `${emailUser}:${emailPass}`;
+  if (transporter && transporterKey === key) return transporter;
 
   if (!emailUser || !emailPass) {
     console.warn('[Email] GMAIL_USER or GMAIL_APP_PASSWORD not set. Emails will not be sent.');
@@ -20,6 +23,7 @@ function getTransporter() {
       pass: emailPass,
     },
   });
+  transporterKey = key;
 
   return transporter;
 }
@@ -204,11 +208,15 @@ function orderConfirmationEmail(order, settings = {}) {
 }
 
 async function sendOrderConfirmation(order, settings = {}) {
-  const transport = getTransporter();
+  const emailSettings = settings.emailSettings || {};
+  if (emailSettings.enabled === false) return false;
+  const transport = getTransporter(emailSettings);
   if (!transport) return false;
+  const senderEmail = secret(emailSettings.smtpUser) || process.env.GMAIL_USER;
 
   const email = order.shippingInfo?.email || order.email;
-  if (!email) {
+  const forwardingEmail = emailSettings.forwardingEnabled === false ? '' : emailSettings.forwardingEmail;
+  if (!email && !forwardingEmail) {
     console.warn('[Email] No email address for order, skipping confirmation.');
     return false;
   }
@@ -217,8 +225,10 @@ async function sendOrderConfirmation(order, settings = {}) {
 
   try {
     await transport.sendMail({
-      from: `"Softy" <${process.env.GMAIL_USER}>`,
-      to: email,
+      from: `"${emailSettings.senderName || 'Softy'}" <${senderEmail}>`,
+      to: email || forwardingEmail,
+      ...(email && forwardingEmail && email !== forwardingEmail ? { bcc: forwardingEmail } : {}),
+      ...(emailSettings.replyTo ? { replyTo: emailSettings.replyTo } : {}),
       subject: `Order Confirmed #${orderId} - Softy`,
       html: orderConfirmationEmail(order, settings),
     });
