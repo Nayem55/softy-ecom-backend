@@ -12,6 +12,7 @@ const multer = require('multer');
 const crypto = require('crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const sharp = require('sharp');
 
 const app = express();
 const allowedOrigins = [
@@ -206,7 +207,22 @@ const hasCloudinaryConfig = () =>
   process.env.CLOUDINARY_CLOUD_NAME !== 'demo' &&
   process.env.CLOUDINARY_API_KEY !== 'demo' &&
   process.env.CLOUDINARY_API_SECRET !== 'demo';
-const uploadBufferToCloudinary = async (file) => {
+const optimizeCloudinaryImage = async (file, { isBanner = false } = {}) => {
+  if (!file?.mimetype?.startsWith('image/')) throw new Error('Upload a valid image file.');
+  if (isBanner) return sharp(file.buffer, { animated: false }).rotate()
+    .resize({ width: 2000, height: 2000, fit: 'inside', withoutEnlargement: true })
+    .webp({ quality: 82, effort: 6, smartSubsample: true }).toBuffer();
+  const levels = [[1000, 76], [900, 66], [800, 60], [700, 55], [600, 50], [480, 45]];
+  let output;
+  for (const [size, quality] of levels) {
+    output = await sharp(file.buffer, { animated: false }).rotate()
+      .resize({ width: size, height: size, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality, effort: 6, smartSubsample: true }).toBuffer();
+    if (output.length <= 100 * 1024) return output;
+  }
+  return output;
+};
+const uploadBufferToCloudinary = async (file, uploadType = '') => {
   const db = getDB(); const settings = await db.collection('siteSettings').findOne({}) || {}; const integration = integrationSettingsOf(settings).cloudinary;
   cloudinary.config({ cloud_name: integration.cloudName || process.env.CLOUDINARY_CLOUD_NAME || 'demo', api_key: process.env.CLOUDINARY_API_KEY || 'demo', api_secret: process.env.CLOUDINARY_API_SECRET || 'demo' });
   if (!integration.enabled || !hasCloudinaryConfig()) {
@@ -215,12 +231,13 @@ const uploadBufferToCloudinary = async (file) => {
     const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${extension}`;
     return new Promise((resolve, reject) => fs.writeFile(path.join(localUploadDir, filename), file.buffer, error => error ? reject(error) : resolve({ secure_url: `/uploads/${filename}`, public_id: filename })));
   }
-  const options = { folder: integration.folder || 'softy-ecommerce', resource_type: 'auto' };
+  const optimizedBuffer = await optimizeCloudinaryImage(file, { isBanner: uploadType === 'banner' });
+  const options = { folder: integration.folder || 'softy-ecommerce', resource_type: 'image', format: 'webp' };
   const uploadPreset = integration.uploadPreset || process.env.CLOUDINARY_UPLOAD_PRESET || process.env.CLOUDINARY_PRESET || process.env.UPLOAD_PRESET;
   if (uploadPreset) options.upload_preset = uploadPreset;
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(options, (error, result) => error ? reject(error) : resolve(result));
-    stream.end(file.buffer);
+    stream.end(optimizedBuffer);
   });
 };
 const sendUploadError = (res, err) => {
@@ -1243,7 +1260,7 @@ app.delete('/api/admin/users/:id', adminAuth, async (req, res) => {
 app.post('/api/upload', adminAuth, singleUpload, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file', message: 'No file' });
-    const result = await uploadBufferToCloudinary(req.file);
+    const result = await uploadBufferToCloudinary(req.file, req.body?.uploadType);
     res.json({ url: result.secure_url, publicId: result.public_id });
   } catch (err) { sendUploadError(res, err); }
 });
