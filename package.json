@@ -8,6 +8,7 @@
     "start": "node index.js",
     "dev": "node --watch index.js",
     "setup": "node scripts/setup.js",
+    "sync:catalog": "node catalog-sync.js",
     "seed": "node scripts/seed.js",
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "check": "node --check index.js && node --check config/db.js && node --check middleware/auth.js"
