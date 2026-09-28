@@ -90,8 +90,8 @@ const integrationSettingsOf = (settings = {}) => ({
   facebookPixel: { ...DEFAULT_INTEGRATION_SETTINGS.facebookPixel, ...(settings.integrations?.facebookPixel || {}), enabled: toBool(settings.integrations?.facebookPixel?.enabled, DEFAULT_INTEGRATION_SETTINGS.facebookPixel.enabled) },
   cloudinary: { ...DEFAULT_INTEGRATION_SETTINGS.cloudinary, ...(settings.integrations?.cloudinary || {}), enabled: toBool(settings.integrations?.cloudinary?.enabled, DEFAULT_INTEGRATION_SETTINGS.cloudinary.enabled) },
 });
-const publicSettingsOf = (settings = {}) => { const safe = { ...settings, integrations: integrationSettingsOf(settings) }; delete safe._id; delete safe.integrations.cloudinary.apiKey; delete safe.integrations.cloudinary.apiSecret; if (safe.emailSettings) { safe.emailSettings = { ...safe.emailSettings, credentialsConfigured: Boolean(safe.emailSettings.smtpUser || safe.emailSettings.smtpPassword) }; delete safe.emailSettings.smtpUser; delete safe.emailSettings.smtpPassword; } return safe; };
-const adminSettingsOf = (settings = {}) => { const safe = publicSettingsOf(settings); const email = settings.emailSettings || {}; safe.emailSettings = { ...safe.emailSettings, smtpUser: email.smtpUser || process.env.GMAIL_USER || '', smtpPassword: decryptEmailSecret(email.smtpPassword), credentialsConfigured: Boolean(email.smtpPassword || process.env.GMAIL_APP_PASSWORD) }; return safe; };
+const publicSettingsOf = (settings = {}) => { const safe = { ...settings, integrations: integrationSettingsOf(settings) }; const cloudinarySettings = safe.integrations.cloudinary; cloudinarySettings.credentialsConfigured = Boolean(cloudinarySettings.apiKey && cloudinarySettings.apiSecret) || Boolean(process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET); delete safe._id; delete cloudinarySettings.apiKey; delete cloudinarySettings.apiSecret; if (safe.emailSettings) { safe.emailSettings = { ...safe.emailSettings, credentialsConfigured: Boolean(safe.emailSettings.smtpUser || safe.emailSettings.smtpPassword) }; delete safe.emailSettings.smtpUser; delete safe.emailSettings.smtpPassword; } return safe; };
+const adminSettingsOf = (settings = {}) => { const safe = publicSettingsOf(settings); const email = settings.emailSettings || {}; safe.emailSettings = { ...safe.emailSettings, smtpUser: email.smtpUser || process.env.GMAIL_USER || '', smtpPassword: decryptEmailSecret(email.smtpPassword), credentialsConfigured: Boolean(email.smtpPassword || process.env.GMAIL_APP_PASSWORD) }; safe.integrations.cloudinary = { ...safe.integrations.cloudinary, apiKey: '', apiSecret: '' }; return safe; };
 const normalizeIntegrationSettings = (input = {}, existing = {}) => {
   const current = integrationSettingsOf(existing); const ga = input.googleAnalytics || {}; const fb = input.facebookPixel || {}; const cl = input.cloudinary || {};
   const measurementId = String(ga.measurementId ?? current.googleAnalytics.measurementId ?? '').trim(); const pixelId = String(fb.pixelId ?? current.facebookPixel.pixelId ?? '').trim();
@@ -100,7 +100,10 @@ const normalizeIntegrationSettings = (input = {}, existing = {}) => {
   if (pixelId && !/^[A-Za-z0-9_-]{3,80}$/.test(pixelId)) throw new Error('Facebook Pixel ID is invalid.');
   if (cloudName && !/^[A-Za-z0-9_-]+$/.test(cloudName)) throw new Error('Cloudinary cloud name is invalid.');
   if (uploadPreset && !/^[A-Za-z0-9_./-]+$/.test(uploadPreset)) throw new Error('Cloudinary upload preset is invalid.');
-  return { googleAnalytics: { enabled: toBool(ga.enabled, current.googleAnalytics.enabled) && Boolean(measurementId), measurementId }, facebookPixel: { enabled: toBool(fb.enabled, current.facebookPixel.enabled) && Boolean(pixelId), pixelId }, cloudinary: { enabled: toBool(cl.enabled, current.cloudinary.enabled), cloudName, uploadPreset, folder } };
+  const existingCloudinary = existing.integrations?.cloudinary || {};
+  const apiKey = String(cl.apiKey || '').trim() || existingCloudinary.apiKey || process.env.CLOUDINARY_API_KEY || '';
+  const apiSecret = String(cl.apiSecret || '').trim() ? encryptEmailSecret(cl.apiSecret) : (existingCloudinary.apiSecret || process.env.CLOUDINARY_API_SECRET || '');
+  return { googleAnalytics: { enabled: toBool(ga.enabled, current.googleAnalytics.enabled) && Boolean(measurementId), measurementId }, facebookPixel: { enabled: toBool(fb.enabled, current.facebookPixel.enabled) && Boolean(pixelId), pixelId }, cloudinary: { enabled: toBool(cl.enabled, current.cloudinary.enabled), cloudName, uploadPreset, folder, apiKey, apiSecret } };
 };
 const toBool = (value, fallback = false) => {
   if (value === undefined || value === null) return fallback;
@@ -200,13 +203,8 @@ const calculateDeliveryCharge = (subtotal, district, settings = {}) => {
     ? Number(shipping.insideDhakaCharge || 0)
     : Number(shipping.outsideDhakaCharge || 0);
 };
-const hasCloudinaryConfig = () =>
-  process.env.CLOUDINARY_CLOUD_NAME &&
-  process.env.CLOUDINARY_API_KEY &&
-  process.env.CLOUDINARY_API_SECRET &&
-  process.env.CLOUDINARY_CLOUD_NAME !== 'demo' &&
-  process.env.CLOUDINARY_API_KEY !== 'demo' &&
-  process.env.CLOUDINARY_API_SECRET !== 'demo';
+const hasCloudinaryConfig = ({ cloudName, apiKey, apiSecret }) =>
+  cloudName && apiKey && apiSecret && cloudName !== 'demo' && apiKey !== 'demo' && apiSecret !== 'demo';
 const optimizeCloudinaryImage = async (file, { isBanner = false } = {}) => {
   if (!file?.mimetype?.startsWith('image/')) throw new Error('Upload a valid image file.');
   if (isBanner) return sharp(file.buffer, { animated: false }).rotate()
@@ -224,8 +222,11 @@ const optimizeCloudinaryImage = async (file, { isBanner = false } = {}) => {
 };
 const uploadBufferToCloudinary = async (file, uploadType = '') => {
   const db = getDB(); const settings = await db.collection('siteSettings').findOne({}) || {}; const integration = integrationSettingsOf(settings).cloudinary;
-  cloudinary.config({ cloud_name: integration.cloudName || process.env.CLOUDINARY_CLOUD_NAME || 'demo', api_key: process.env.CLOUDINARY_API_KEY || 'demo', api_secret: process.env.CLOUDINARY_API_SECRET || 'demo' });
-  if (!integration.enabled || !hasCloudinaryConfig()) {
+  const cloudName = integration.cloudName || process.env.CLOUDINARY_CLOUD_NAME || 'demo';
+  const apiKey = integration.apiKey || process.env.CLOUDINARY_API_KEY || 'demo';
+  const apiSecret = integration.apiSecret ? decryptEmailSecret(integration.apiSecret) : (process.env.CLOUDINARY_API_SECRET || 'demo');
+  cloudinary.config({ cloud_name: cloudName, api_key: apiKey, api_secret: apiSecret });
+  if (!integration.enabled || !hasCloudinaryConfig({ cloudName, apiKey, apiSecret })) {
     const extension = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' }[file.mimetype];
     if (!extension) throw new Error('Upload a JPG, PNG, WebP, or GIF image.');
     const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${extension}`;
@@ -905,7 +906,7 @@ app.get('/api/admin/settings', adminAuth, async (req, res) => {
   try { const db = getDB(); const settings = await db.collection('siteSettings').findOne({}); res.json({ settings: adminSettingsOf(settings || {}) }); } catch (err) { res.status(500).json({ error: err.message }); }
 });
 app.put('/api/admin/settings', adminAuth, async (req, res) => {
-  try { const db = getDB(); const existing = await db.collection('siteSettings').findOne({}) || {}; const update = { ...req.body, integrations: normalizeIntegrationSettings(req.body.integrations, existing), emailSettings: normalizeEmailSettings(req.body.emailSettings, existing) }; delete update._id; delete update.createdAt; delete update.integrations.cloudinary.apiKey; delete update.integrations.cloudinary.apiSecret; update.updatedAt = new Date(); await db.collection('siteSettings').updateOne({}, { $set: update }, { upsert: true }); res.json({ success: true, settings: adminSettingsOf({ ...existing, ...update }) }); } catch (err) { res.status(400).json({ error: err.message }); }
+  try { const db = getDB(); const existing = await db.collection('siteSettings').findOne({}) || {}; const update = { ...req.body, integrations: normalizeIntegrationSettings(req.body.integrations, existing), emailSettings: normalizeEmailSettings(req.body.emailSettings, existing) }; delete update._id; delete update.createdAt; update.updatedAt = new Date(); await db.collection('siteSettings').updateOne({}, { $set: update }, { upsert: true }); res.json({ success: true, settings: adminSettingsOf({ ...existing, ...update }) }); } catch (err) { res.status(400).json({ error: err.message }); }
 });
 app.put('/api/settings', adminAuth, async (req, res) => {
   try { const db = getDB(); const existing = await db.collection('siteSettings').findOne({}) || {}; const update = { ...req.body, integrations: normalizeIntegrationSettings(req.body.integrations, existing), emailSettings: normalizeEmailSettings(req.body.emailSettings, existing) }; delete update._id; delete update.createdAt; update.updatedAt = new Date(); await db.collection('siteSettings').updateOne({}, { $set: update }, { upsert: true }); res.json({ success: true, settings: adminSettingsOf({ ...existing, ...update }) }); } catch (err) { res.status(400).json({ error: err.message }); }
