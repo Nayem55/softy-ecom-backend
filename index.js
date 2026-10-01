@@ -265,7 +265,7 @@ async function seedAdmin() {
   const ex = await db.collection('admins').findOne({ email: process.env.ADMIN_EMAIL });
   if (!ex) {
     const hash = await bcrypt.hash(process.env.ADMIN_PASSWORD, 10);
-    await db.collection('admins').insertOne({ email: process.env.ADMIN_EMAIL, password: hash, name: 'Softy Admin', createdAt: new Date() });
+    await db.collection('admins').insertOne({ email: process.env.ADMIN_EMAIL, password: hash, name: 'Softy Admin', role: 'admin', active: true, createdAt: new Date() });
     console.log('Admin seeded');
   }
 }
@@ -366,15 +366,58 @@ app.post('/api/auth/admin/login', async (req, res) => {
     const db = getDB();
     const { email, password } = req.body;
     const admin = await db.collection('admins').findOne({ email });
-    if (!admin) return res.status(400).json({ error: 'Invalid credentials' });
+    if (!admin || admin.active === false) return res.status(400).json({ error: 'Invalid credentials' });
     const valid = await bcrypt.compare(password, admin.password);
     if (!valid) return res.status(400).json({ error: 'Invalid credentials' });
-    const token = generateToken(admin, 'admin');
-    res.json({ token, admin: { _id: admin._id, name: admin.name, email: admin.email } });
+    const role = ['admin', 'ad_manager', 'store_manager'].includes(admin.role) ? admin.role : 'admin';
+    const token = generateToken(admin, role);
+    res.json({ token, admin: { _id: admin._id, name: admin.name, email: admin.email, role } });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/auth/admin/me', adminAuth, (req, res) => { res.json({ admin: req.admin }); });
+
+const STAFF_ROLES = ['admin', 'ad_manager', 'store_manager'];
+app.get('/api/admin/staff', adminAuth, async (req, res) => {
+  const admins = await getDB().collection('admins').find({}, { projection: { password: 0 } }).sort({ createdAt: -1 }).toArray();
+  res.json({ staff: admins.map(({ role, active, ...admin }) => ({ ...admin, role: STAFF_ROLES.includes(role) ? role : 'admin', active: active !== false })) });
+});
+app.post('/api/admin/staff', adminAuth, async (req, res) => {
+  try {
+    const { name, email, password, role } = req.body || {};
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (!String(name || '').trim() || !normalizedEmail || !String(password || '')) return res.status(400).json({ error: 'Name, email, and password are required' });
+    if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    if (!STAFF_ROLES.includes(role)) return res.status(400).json({ error: 'Choose a valid role' });
+    const db = getDB();
+    if (await db.collection('admins').findOne({ email: normalizedEmail })) return res.status(409).json({ error: 'An admin with this email already exists' });
+    const result = await db.collection('admins').insertOne({ name: String(name).trim(), email: normalizedEmail, password: await bcrypt.hash(String(password), 10), role, active: true, createdAt: new Date() });
+    res.status(201).json({ staff: { _id: result.insertedId, name: String(name).trim(), email: normalizedEmail, role, active: true } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.patch('/api/admin/staff/:id', adminAuth, async (req, res) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid staff member' });
+    const db = getDB();
+    const staff = await db.collection('admins').findOne({ _id: ObjectId.createFromHexString(req.params.id) });
+    if (!staff) return res.status(404).json({ error: 'Staff member not found' });
+    const updates = {};
+    if (req.body?.name !== undefined) updates.name = String(req.body.name).trim();
+    if (req.body?.role !== undefined) {
+      if (!STAFF_ROLES.includes(req.body.role)) return res.status(400).json({ error: 'Choose a valid role' });
+      updates.role = req.body.role;
+    }
+    if (req.body?.active !== undefined) updates.active = Boolean(req.body.active);
+    if (req.body?.password) {
+      if (String(req.body.password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+      updates.password = await bcrypt.hash(String(req.body.password), 10);
+    }
+    if (staff._id.equals(req.admin._id) && (updates.role && updates.role !== 'admin' || updates.active === false)) return res.status(400).json({ error: 'You cannot remove your own full access' });
+    await db.collection('admins').updateOne({ _id: staff._id }, { $set: updates });
+    const updated = await db.collection('admins').findOne({ _id: staff._id }, { projection: { password: 0 } });
+    res.json({ staff: { ...updated, role: STAFF_ROLES.includes(updated.role) ? updated.role : 'admin', active: updated.active !== false } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 // ============ PRODUCT ROUTES ============
 app.get('/api/products', async (req, res) => {
   try {
@@ -903,14 +946,40 @@ app.get('/api/settings', async (req, res) => {
   try { const db = getDB(); const settings = await db.collection('siteSettings').findOne({}); res.json({ settings: publicSettingsOf(settings || {}) }); } catch (err) { res.status(500).json({ error: err.message }); }
 });
 app.get('/api/admin/settings', adminAuth, async (req, res) => {
-  try { const db = getDB(); const settings = await db.collection('siteSettings').findOne({}); res.json({ settings: adminSettingsOf(settings || {}) }); } catch (err) { res.status(500).json({ error: err.message }); }
+  try {
+    const db = getDB();
+    const settings = await db.collection('siteSettings').findOne({});
+    const value = adminSettingsOf(settings || {});
+    if (req.admin.role === 'ad_manager') value.integrations = { googleAnalytics: value.integrations.googleAnalytics, facebookPixel: value.integrations.facebookPixel };
+    res.json({ settings: value });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
-app.put('/api/admin/settings', adminAuth, async (req, res) => {
-  try { const db = getDB(); const existing = await db.collection('siteSettings').findOne({}) || {}; const update = { ...req.body, integrations: normalizeIntegrationSettings(req.body.integrations, existing), emailSettings: normalizeEmailSettings(req.body.emailSettings, existing) }; delete update._id; delete update.createdAt; update.updatedAt = new Date(); await db.collection('siteSettings').updateOne({}, { $set: update }, { upsert: true }); res.json({ success: true, settings: adminSettingsOf({ ...existing, ...update }) }); } catch (err) { res.status(400).json({ error: err.message }); }
-});
-app.put('/api/settings', adminAuth, async (req, res) => {
-  try { const db = getDB(); const existing = await db.collection('siteSettings').findOne({}) || {}; const update = { ...req.body, integrations: normalizeIntegrationSettings(req.body.integrations, existing), emailSettings: normalizeEmailSettings(req.body.emailSettings, existing) }; delete update._id; delete update.createdAt; update.updatedAt = new Date(); await db.collection('siteSettings').updateOne({}, { $set: update }, { upsert: true }); res.json({ success: true, settings: adminSettingsOf({ ...existing, ...update }) }); } catch (err) { res.status(400).json({ error: err.message }); }
-});
+async function saveAdminSettings(req, res) {
+  try {
+    const db = getDB();
+    const existing = await db.collection('siteSettings').findOne({}) || {};
+    let update;
+    if (req.admin.role === 'ad_manager') {
+      const integrations = normalizeIntegrationSettings({
+        googleAnalytics: req.body?.integrations?.googleAnalytics,
+        facebookPixel: req.body?.integrations?.facebookPixel,
+        cloudinary: {},
+      }, existing);
+      update = { integrations, updatedAt: new Date() };
+    } else {
+      update = { ...req.body, integrations: normalizeIntegrationSettings(req.body.integrations, existing), emailSettings: normalizeEmailSettings(req.body.emailSettings, existing) };
+      delete update._id;
+      delete update.createdAt;
+      update.updatedAt = new Date();
+    }
+    await db.collection('siteSettings').updateOne({}, { $set: update }, { upsert: true });
+    const value = adminSettingsOf({ ...existing, ...update });
+    if (req.admin.role === 'ad_manager') value.integrations = { googleAnalytics: value.integrations.googleAnalytics, facebookPixel: value.integrations.facebookPixel };
+    res.json({ success: true, settings: value });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+}
+app.put('/api/admin/settings', adminAuth, saveAdminSettings);
+app.put('/api/settings', adminAuth, saveAdminSettings);
 
 // ============ ORDER ROUTES ============
 app.post('/api/orders', async (req, res) => {

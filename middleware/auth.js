@@ -7,13 +7,26 @@ async function adminAuth(req, res, next) {
     if (!token) return res.status(401).json({ error: 'Access denied' });
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    if (decoded.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
 
     const db = getDB();
     const admin = await db.collection('admins').findOne({ _id: require('mongodb').ObjectId.createFromHexString(decoded.id) }, { projection: { password: 0 } });
-    if (!admin) return res.status(401).json({ error: 'Admin not found' });
+    if (!admin || admin.active === false) return res.status(401).json({ error: 'Admin not found' });
 
-    req.admin = admin;
+    const role = ['admin', 'ad_manager', 'store_manager'].includes(admin.role) ? admin.role : 'admin';
+    const path = req.originalUrl.split('?')[0];
+    const canManageStore = path === '/api/upload'
+      || path === '/api/upload/multiple'
+      || path === '/api/admin/dashboard/stats'
+      || /^\/api\/admin\/(products|categories|subcategories|brands|orders)(\/|$)/.test(path);
+    const canManageMarketing = path === '/api/auth/admin/me'
+      || path === '/api/admin/settings'
+      || path === '/api/settings'
+      || path === '/api/admin/change-password';
+
+    if (role === 'ad_manager' && !canManageMarketing) return res.status(403).json({ error: 'Your role can only manage marketing settings' });
+    if (role === 'store_manager' && !canManageStore && path !== '/api/auth/admin/me' && path !== '/api/admin/change-password') return res.status(403).json({ error: 'Your role can only manage store operations' });
+
+    req.admin = { ...admin, role };
     next();
   } catch (err) {
     res.status(401).json({ error: 'Invalid token' });
