@@ -11,6 +11,10 @@ const publicRoots = [
 ];
 const imagePattern = /\.(?:jpe?g|png|webp)$/i;
 const slugify = (value) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+const categoryImageOverrides = {
+  'Men Face Wash': '/products/softyy/softyy-charcoal-force-men-face-wash/image-2.jpg',
+  'Soothing Gel': '/products/softyy/softyy-milk-soothing-gel/image-2.jpg',
+};
 
 function copyImages(item) {
   const files = fs.readdirSync(item.folder, { withFileTypes: true })
@@ -59,7 +63,7 @@ async function syncCatalog() {
       const slug = slugify(name);
       const category = await collection('categories').findOneAndUpdate(
         { slug },
-        { $set: { name, slug, description: categoryDescriptions[name], image: imageMap.get(item.slug)[0], order: order + 1, isActive: true, updatedAt: now }, $setOnInsert: { createdAt: now } },
+        { $set: { name, slug, description: categoryDescriptions[name], image: categoryImageOverrides[name] || imageMap.get(item.slug)[0], order: order + 1, isActive: true, updatedAt: now }, $setOnInsert: { createdAt: now } },
         { upsert: true, returnDocument: 'after' },
       );
       categoryIds.set(name, category._id.toString());
