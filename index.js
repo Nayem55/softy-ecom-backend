@@ -80,6 +80,8 @@ const DEFAULT_INTEGRATION_SETTINGS = {
   cloudinary: { enabled: true, cloudName: process.env.CLOUDINARY_CLOUD_NAME || '', uploadPreset: process.env.CLOUDINARY_UPLOAD_PRESET || process.env.CLOUDINARY_PRESET || process.env.UPLOAD_PRESET || '', folder: process.env.CLOUDINARY_FOLDER || 'softy-ecommerce' },
 };
 const DEFAULT_EMAIL_SETTINGS = { enabled: true, forwardingEnabled: true, forwardingEmail: process.env.ORDER_FORWARDING_EMAIL || process.env.ORDER_NOTIFICATION_EMAIL || process.env.GMAIL_USER || '', senderName: process.env.EMAIL_SENDER_NAME || 'Softy', replyTo: process.env.EMAIL_REPLY_TO || '', smtpUser: process.env.GMAIL_USER || '' };
+const DEFAULT_HOME_HERO = { eyebrow: 'Everyday care', title: 'Soft on you. Kind to your skin.', description: 'Gentle, effective care for the rituals that help you feel your best every day.', image: '/editorial/softyy-hero-editorial.png', buttonText: 'Shop skincare', buttonLink: '/shop' };
+const DEFAULT_PROMO = { title: 'Care that feels good every day.', description: 'Simple formulas made for a softer, brighter routine.', image: '/editorial/softyy-boutique-care.png', buttonText: 'Explore products', buttonLink: '/shop' };
 const emailKey = crypto.createHash('sha256').update(process.env.JWT_SECRET || 'softy-email-settings-key').digest();
 const encryptEmailSecret = (value) => { if (!value) return ''; const iv = crypto.randomBytes(12); const cipher = crypto.createCipheriv('aes-256-gcm', emailKey, iv); const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]); return `enc:${iv.toString('base64')}:${cipher.getAuthTag().toString('base64')}:${encrypted.toString('base64')}`; };
 const decryptEmailSecret = (value) => { if (!value) return process.env.GMAIL_APP_PASSWORD || ''; if (!String(value).startsWith('enc:')) return String(value); try { const [, iv, tag, data] = String(value).split(':'); const decipher = crypto.createDecipheriv('aes-256-gcm', emailKey, Buffer.from(iv, 'base64')); decipher.setAuthTag(Buffer.from(tag, 'base64')); return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8'); } catch { return ''; } };
@@ -288,6 +290,8 @@ async function seedSettings() {
       emailSettings: DEFAULT_EMAIL_SETTINGS,
       headerCategoryMenu: { enabled: true, label: 'Categories', showEmptyCategories: true },
       headerBrandMenu: { enabled: true, label: 'Brands' },
+      homeHero: DEFAULT_HOME_HERO,
+      promo: DEFAULT_PROMO,
       navLinks: [
         { label: 'Shop', url: '/shop', active: true, accent: false },
         { label: 'Skin Care', url: '/shop?category=face-care', active: true, accent: false },
@@ -297,10 +301,14 @@ async function seedSettings() {
       createdAt: new Date(),
     });
     console.log('Settings seeded');
-  } else if (['/brand/softyy-logo.png', '/brand/softy-ecom-logo.png'].includes(ex.logo)) {
+  } else {
+    const updates = { updatedAt: new Date() };
+    if (['/brand/softyy-logo.png', '/brand/softy-ecom-logo.png'].includes(ex.logo)) updates.logo = '/brand/softy-ecom-logo-v2.png';
+    if (!ex.homeHero?.image) updates.homeHero = DEFAULT_HOME_HERO;
+    if (!ex.promo?.image) updates.promo = DEFAULT_PROMO;
     await db.collection('siteSettings').updateOne(
       { _id: ex._id },
-      { $set: { logo: '/brand/softy-ecom-logo-v2.png', updatedAt: new Date() } }
+      { $set: updates }
     );
   }
 }
