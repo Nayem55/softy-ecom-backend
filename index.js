@@ -324,6 +324,7 @@ async function createIndexes() {
   await db.collection('products').createIndex({ slug: 1 }, { unique: true });
   await db.collection('categories').createIndex({ slug: 1 }, { unique: true });
   await db.collection('brands').createIndex({ slug: 1 }, { unique: true });
+  await db.collection('blogs').createIndex({ slug: 1 }, { unique: true });
   await db.collection('orders').createIndex({ orderId: 1 });
   await db.collection('users').createIndex({ email: 1 }, { unique: true });
   await db.collection('coupons').createIndex({ code: 1 }, { unique: true });
@@ -575,13 +576,13 @@ const cleanText = (value) => (typeof value === 'string' ? value.trim() : '');
 app.post('/api/admin/products', adminAuth, async (req, res) => {
   try {
     const db = getDB();
-    const { name, description, shortDescription, additionalNote, images, brand, colors, stock, tags, isTrending, isFeatured, isBestSeller, isNew, isBridal } = req.body;
+    const { name, description, shortDescription, additionalNote, barcode, images, brand, colors, stock, tags, isTrending, isFeatured, isBestSeller, isNew, isBridal } = req.body;
     const pricing = pricingFromInput(req.body);
     const taxonomy = await normalizeProductTaxonomy(db, req.body);
     if (!name || !pricing.regularPrice) return res.status(400).json({ error: 'Name and regular price required' });
 
     const product = {
-      name, slug: slugify(name) + '-' + Date.now().toString(36), description: description || '', shortDescription: cleanText(shortDescription), additionalNote: cleanText(additionalNote),
+      name, slug: slugify(name) + '-' + Date.now().toString(36), description: description || '', shortDescription: cleanText(shortDescription), additionalNote: cleanText(additionalNote), barcode: cleanText(barcode).slice(0, 120),
       ...pricing,
       ...taxonomy,
       images: images || [], brand: brand || '',
@@ -743,6 +744,7 @@ app.put('/api/admin/products/:id', adminAuth, async (req, res) => {
     delete update.categoryRows;
     if (Object.prototype.hasOwnProperty.call(update, 'additionalNote')) update.additionalNote = cleanText(update.additionalNote);
     if (Object.prototype.hasOwnProperty.call(update, 'shortDescription')) update.shortDescription = cleanText(update.shortDescription);
+    if (Object.prototype.hasOwnProperty.call(update, 'barcode')) update.barcode = cleanText(update.barcode).slice(0, 120);
     if (update.name && !update.slug) update.slug = slugify(update.name) + '-' + req.params.id;
     const hasTaxonomyUpdate = ['category', 'categories', 'subcategory', 'subcategories'].some((key) => Object.prototype.hasOwnProperty.call(update, key));
     if (hasTaxonomyUpdate) Object.assign(update, await normalizeProductTaxonomy(db, update));
@@ -1271,6 +1273,26 @@ app.get('/api/admin/newsletter', adminAuth, async (req, res) => {
 });
 
 // ============ PAGES ============
+// ============ BLOGS ============
+app.get('/api/blogs', async (req, res) => {
+  try { const blogs = await getDB().collection('blogs').find({ isPublished: { $ne: false } }).sort({ publishedAt: -1, createdAt: -1 }).toArray(); res.json({ blogs }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/blogs/:slug', async (req, res) => {
+  try { const blog = await getDB().collection('blogs').findOne({ slug: req.params.slug, isPublished: { $ne: false } }); if (!blog) return res.status(404).json({ error: 'Post not found' }); res.json({ blog }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/admin/blogs', adminAuth, async (req, res) => {
+  try { res.json({ blogs: await getDB().collection('blogs').find({}).sort({ updatedAt: -1, createdAt: -1 }).toArray() }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/admin/blogs', adminAuth, async (req, res) => {
+  try { const { title, excerpt = '', content = '', image = '', isPublished = false } = req.body; if (!String(title || '').trim()) return res.status(400).json({ error: 'Title required' }); const now = new Date(); const blog = { title: String(title).trim(), slug: slugify(req.body.slug || title), excerpt: String(excerpt).trim(), content: String(content), image: String(image).trim(), isPublished: isPublished === true || isPublished === 'true', publishedAt: (isPublished === true || isPublished === 'true') ? now : null, createdAt: now, updatedAt: now }; const result = await getDB().collection('blogs').insertOne(blog); res.status(201).json({ blog: { ...blog, _id: result.insertedId } }); } catch (err) { res.status(500).json({ error: err.code === 11000 ? 'A post with this slug already exists' : err.message }); }
+});
+app.put('/api/admin/blogs/:id', adminAuth, async (req, res) => {
+  try { if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid post ID' }); const update = { ...req.body, updatedAt: new Date() }; delete update._id; if (update.title) { update.title = String(update.title).trim(); update.slug = slugify(update.slug || update.title); } ['excerpt', 'content', 'image'].forEach(key => { if (key in update) update[key] = String(update[key] || '').trim(); }); if ('isPublished' in update) update.isPublished = update.isPublished === true || update.isPublished === 'true'; await getDB().collection('blogs').updateOne({ _id: ObjectId.createFromHexString(req.params.id) }, { $set: update }); res.json({ success: true }); } catch (err) { res.status(500).json({ error: err.code === 11000 ? 'A post with this slug already exists' : err.message }); }
+});
+app.delete('/api/admin/blogs/:id', adminAuth, async (req, res) => {
+  try { if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid post ID' }); await getDB().collection('blogs').deleteOne({ _id: ObjectId.createFromHexString(req.params.id) }); res.json({ success: true }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/pages/:slug', async (req, res) => {
   try { const db = getDB(); const page = await db.collection('pages').findOne({ slug: req.params.slug, isPublished: true }); if (!page) return res.status(404).json({ error: 'Page not found' }); res.json({ page }); } catch (err) { res.status(500).json({ error: err.message }); }
 });
