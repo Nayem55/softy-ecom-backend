@@ -797,11 +797,23 @@ app.post('/api/admin/categories', adminAuth, async (req, res) => {
 app.put('/api/admin/categories/:id', adminAuth, async (req, res) => {
   try {
     const db = getDB();
+    if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: 'Invalid category ID' });
+    const categoryId = ObjectId.createFromHexString(req.params.id);
+    const existing = await db.collection('categories').findOne({ _id: categoryId });
+    if (!existing) return res.status(404).json({ error: 'Category not found' });
     const update = { ...req.body }; delete update._id;
     if (update.name && !update.slug) update.slug = slugify(update.name);
-    if (update.order !== undefined) update.order = Number(update.order) || 0;
+    if (update.order !== undefined) {
+      const requestedOrder = Number(update.order);
+      if (!Number.isInteger(requestedOrder) || requestedOrder < 0) return res.status(400).json({ error: 'Order must be a non-negative whole number' });
+      update.order = requestedOrder;
+      if (requestedOrder !== Number(existing.order || 0)) {
+        const categoryAtRequestedOrder = await db.collection('categories').findOne({ _id: { $ne: categoryId }, order: requestedOrder });
+        if (categoryAtRequestedOrder) await db.collection('categories').updateOne({ _id: categoryAtRequestedOrder._id }, { $set: { order: Number(existing.order || 0), updatedAt: new Date() } });
+      }
+    }
     if (update.isActive !== undefined) update.isActive = toBool(update.isActive, true);
-    await db.collection('categories').updateOne({ _id: ObjectId.createFromHexString(req.params.id) }, { $set: update });
+    await db.collection('categories').updateOne({ _id: categoryId }, { $set: update });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
