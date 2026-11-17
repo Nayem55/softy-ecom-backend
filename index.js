@@ -431,7 +431,7 @@ app.patch('/api/admin/staff/:id', adminAuth, async (req, res) => {
 app.get('/api/products', async (req, res) => {
   try {
     const db = getDB();
-    const { page = 1, limit = 20, category, subcategory, brand, search, q, minPrice, maxPrice, sort, isTrending, isNew, isBestSeller, isFeatured, isBridal } = req.query;
+    const { page = 1, limit = 20, category, subcategory, brand, search, q, minPrice, maxPrice, sort, isTrending, isNew, isBestSeller, isFeatured } = req.query;
     const searchTerm = (search || q || '').trim();
     const filter = { isActive: true };
     if (category) {
@@ -458,7 +458,6 @@ app.get('/api/products', async (req, res) => {
     if (isNew === 'true') filter.isNew = true;
     if (isBestSeller === 'true') filter.isBestSeller = true;
     if (isFeatured === 'true') filter.isFeatured = true;
-    if (isBridal === 'true') filter.isBridal = true;
     let sortObj = { createdAt: -1 };
     if (sort === 'price' || sort === 'price_asc') sortObj = { price: 1 };
     else if (sort === '-price' || sort === 'price_desc') sortObj = { price: -1 };
@@ -576,7 +575,7 @@ const cleanText = (value) => (typeof value === 'string' ? value.trim() : '');
 app.post('/api/admin/products', adminAuth, async (req, res) => {
   try {
     const db = getDB();
-    const { name, description, shortDescription, additionalNote, barcode, images, brand, colors, stock, tags, isTrending, isFeatured, isBestSeller, isNew, isBridal } = req.body;
+    const { name, description, shortDescription, additionalNote, barcode, images, brand, stock, tags, isTrending, isFeatured, isBestSeller, isNew } = req.body;
     const pricing = pricingFromInput(req.body);
     const taxonomy = await normalizeProductTaxonomy(db, req.body);
     if (!name || !pricing.regularPrice) return res.status(400).json({ error: 'Name and regular price required' });
@@ -586,8 +585,8 @@ app.post('/api/admin/products', adminAuth, async (req, res) => {
       ...pricing,
       ...taxonomy,
       images: images || [], brand: brand || '',
-      colors: colors || [], stock: stock || 0, tags: tags || [],
-      isTrending: !!isTrending, isFeatured: !!isFeatured, isBestSeller: !!isBestSeller, isNew: isNew !== false, isBridal: !!isBridal,
+      stock: stock || 0, tags: tags || [],
+      isTrending: !!isTrending, isFeatured: !!isFeatured, isBestSeller: !!isBestSeller, isNew: isNew !== false,
       isActive: true, createdAt: new Date(),
     };
     const result = await db.collection('products').insertOne(product);
@@ -641,7 +640,6 @@ app.post('/api/admin/products/import', adminAuth, async (req, res) => {
         if (subcategoryParentId && !categoryIds.includes(subcategoryParentId)) categoryIds.push(subcategoryParentId);
         const subcategoryIds = subcategoryId ? [subcategoryId] : [];
 
-        const colors = row.Colors ? row.Colors.split(',').map(c => c.trim()).filter(Boolean) : [];
         const tags = row.Tags ? row.Tags.split(',').map(t => t.trim()).filter(Boolean) : [];
         const images = row.Images ? row.Images.split(',').map(u => u.trim()).filter(Boolean) : [];
 
@@ -663,13 +661,11 @@ app.post('/api/admin/products/import', adminAuth, async (req, res) => {
           categories: categoryIds,
           subcategories: subcategoryIds,
           images,
-          colors,
           tags,
           isNew: row.IsNew !== 'false' && row.IsNew !== '0',
           isTrending: row.IsTrending === 'true' || row.IsTrending === '1',
           isFeatured: row.IsFeatured === 'true' || row.IsFeatured === '1',
           isBestSeller: row.IsBestSeller === 'true' || row.IsBestSeller === '1',
-          isBridal: row.IsBridal === 'true' || row.IsBridal === '1',
           isActive: true,
           createdAt: new Date(),
         };
@@ -692,6 +688,8 @@ app.put('/api/admin/products/bulk-update', adminAuth, async (req, res) => {
     let updates = req.body.updates || req.body.data || {};
     delete updates._id;
     delete updates.categoryRows;
+    delete updates.colors;
+    delete updates.isBridal;
     if (!ids.length) return res.status(400).json({ error: 'No valid product IDs supplied' });
     if (!Object.keys(updates).length) return res.status(400).json({ error: 'No updates supplied' });
     const hasTaxonomyUpdate = ['category', 'categories', 'subcategory', 'subcategories'].some((key) => Object.prototype.hasOwnProperty.call(updates, key));
@@ -725,6 +723,8 @@ app.put('/api/admin/products/bulk', adminAuth, async (req, res) => {
     if (action === 'update') {
       delete data._id;
       delete data.categoryRows;
+      delete data.colors;
+      delete data.isBridal;
       const hasTaxonomyUpdate = ['category', 'categories', 'subcategory', 'subcategories'].some((key) => Object.prototype.hasOwnProperty.call(data, key));
       if (hasTaxonomyUpdate) Object.assign(data, await normalizeProductTaxonomy(db, data));
       data.updatedAt = new Date();
@@ -742,6 +742,8 @@ app.put('/api/admin/products/:id', adminAuth, async (req, res) => {
     const update = mergePricingUpdate({ ...req.body }, existing || {});
     delete update._id;
     delete update.categoryRows;
+    delete update.colors;
+    delete update.isBridal;
     if (Object.prototype.hasOwnProperty.call(update, 'additionalNote')) update.additionalNote = cleanText(update.additionalNote);
     if (Object.prototype.hasOwnProperty.call(update, 'shortDescription')) update.shortDescription = cleanText(update.shortDescription);
     if (Object.prototype.hasOwnProperty.call(update, 'barcode')) update.barcode = cleanText(update.barcode).slice(0, 120);
