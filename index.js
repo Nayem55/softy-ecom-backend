@@ -94,6 +94,11 @@ const integrationSettingsOf = (settings = {}) => ({
 });
 const publicSettingsOf = (settings = {}) => { const safe = { ...settings, integrations: integrationSettingsOf(settings) }; const cloudinarySettings = safe.integrations.cloudinary; cloudinarySettings.credentialsConfigured = Boolean(cloudinarySettings.apiKey && cloudinarySettings.apiSecret) || Boolean(process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET); delete safe._id; delete cloudinarySettings.apiKey; delete cloudinarySettings.apiSecret; if (safe.emailSettings) { safe.emailSettings = { ...safe.emailSettings, credentialsConfigured: Boolean(safe.emailSettings.smtpUser || safe.emailSettings.smtpPassword) }; delete safe.emailSettings.smtpUser; delete safe.emailSettings.smtpPassword; } return safe; };
 const adminSettingsOf = (settings = {}) => { const safe = publicSettingsOf(settings); const email = settings.emailSettings || {}; safe.emailSettings = { ...safe.emailSettings, smtpUser: email.smtpUser || process.env.GMAIL_USER || '', smtpPassword: decryptEmailSecret(email.smtpPassword), credentialsConfigured: Boolean(email.smtpPassword || process.env.GMAIL_APP_PASSWORD) }; safe.integrations.cloudinary = { ...safe.integrations.cloudinary, apiKey: '', apiSecret: '' }; return safe; };
+const bannerSliderSettingsOf = (input = {}, existing = {}) => {
+  const current = existing.bannerSlider || {};
+  const rawInterval = Number(input.intervalMs ?? current.intervalMs ?? 5000);
+  return { autoplay: toBool(input.autoplay, current.autoplay ?? true), intervalMs: Math.min(30000, Math.max(2000, Number.isFinite(rawInterval) ? rawInterval : 5000)) };
+};
 const normalizeIntegrationSettings = (input = {}, existing = {}) => {
   const current = integrationSettingsOf(existing); const ga = input.googleAnalytics || {}; const fb = input.facebookPixel || {}; const cl = input.cloudinary || {};
   const measurementId = String(ga.measurementId ?? current.googleAnalytics.measurementId ?? '').trim(); const pixelId = String(fb.pixelId ?? current.facebookPixel.pixelId ?? '').trim();
@@ -991,7 +996,7 @@ async function saveAdminSettings(req, res) {
       }, existing);
       update = { integrations, updatedAt: new Date() };
     } else {
-      update = { ...req.body, integrations: normalizeIntegrationSettings(req.body.integrations, existing), emailSettings: normalizeEmailSettings(req.body.emailSettings, existing) };
+      update = { ...req.body, bannerSlider: bannerSliderSettingsOf(req.body.bannerSlider, existing), integrations: normalizeIntegrationSettings(req.body.integrations, existing), emailSettings: normalizeEmailSettings(req.body.emailSettings, existing) };
       delete update._id;
       delete update.createdAt;
       update.updatedAt = new Date();
